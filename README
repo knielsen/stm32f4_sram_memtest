@@ -1,0 +1,6 @@
+A quick test of the SRAM on the STM32F4 board.
+
+The startup code initialises the FSMC for the SRAM chip on SRAM 1.
+
+The main program fills the memory with various patterns and reads it
+back in to check that it works correctly.
