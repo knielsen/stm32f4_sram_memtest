@@ -501,13 +501,20 @@ void SystemInit_ExtMemCtl(void)
   
 /*-- FSMC Configuration ------------------------------------------------------*/
   /* Enable the FSMC interface clock */
-  RCC->AHB3ENR         = 0x00000001;
+  RCC->AHB3ENR         |= 0x00000001;
+
+  /* Reset the FSMC bank 1. */
+  FSMC_Bank1->BTCR[0]  &= ((uint32_t)0x000FFFFE);
 
   /* Configure and enable Bank1_SRAM1 */
-  FSMC_Bank1->BTCR[0]  = 0x00001011;
+  FSMC_Bank1->BTCR[0]  = 0x00001010;
   FSMC_Bank1->BTCR[1]  = 0x00010603;
   //FSMC_Bank1->BTCR[1]  = 0x00050f07;
   FSMC_Bank1E->BWTR[0] = 0x0fffffff;
+
+  /* Enable it. */
+  FSMC_Bank1->BTCR[0]  |= ((uint32_t)0x00000001);
+
 /*
   Bank1_SRAM2 is configured as follow:
 

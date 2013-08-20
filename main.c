@@ -336,7 +336,6 @@ int main(void)
     check_block(word, 0x10000);
 
     word += 18637;
-    delay(5000000);
   }
 
   return 0;
