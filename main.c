@@ -313,6 +313,22 @@ check_block(uint16_t start, uint32_t block)
 }
 
 
+static void
+blinker(void)
+{
+  for (;;)
+  {
+    uint32_t i;
+    GPIOG->BSRRL = GPIO_Pin_15;
+    for (i= 0; i < 5000000; ++i)
+      __asm volatile("nop");
+    GPIOG->BSRRH = GPIO_Pin_15;
+    for (i= 0; i < 5000000; ++i)
+      __asm volatile("nop");
+  }
+}
+
+
 int main(void)
 {
   uint16_t word;
@@ -326,6 +342,20 @@ int main(void)
   serial_puts(USART2, "Hello world, ready to blink!\r\n");
 
   word = 1;
+
+  {
+    /* Copy the blinker function to sram and test that it works. */
+    uint16_t *mem = (uint16_t *)(uint32_t)0x6000babe;
+    uint16_t *orig_blink = (uint16_t *)((uint32_t)0xfffffffe & (uint32_t)(uint16_t *)blinker);
+    void (*copy_blink)(void) = (void (*)(void))((uint8_t *)mem+1);
+    uint32_t i;
+    for (i = 0; i < 1000; ++i)
+      mem[i] = orig_blink[i];
+    //blinker();
+    (*copy_blink)();
+    for (;;)
+      ;
+  }
 
   while (1)
   {
