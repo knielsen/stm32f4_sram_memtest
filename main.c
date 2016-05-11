@@ -14,7 +14,9 @@
 #include <stm32f4_discovery.h>
 
 
+#define MCU_HZ 168000000
 #define SRAM_SIZE ((uint32_t)(2*1024*1024))
+#define SRAM ((uint16_t *)(uint32_t)0x60000000)
 
 /* This is apparently needed for libc/libm (eg. powf()). */
 int __errno;
@@ -78,12 +80,29 @@ setup_led(void)
 
 
 static void
+setup_dummy_gpio(void)
+{
+  GPIO_InitTypeDef GPIO_InitStructure;
+
+  RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_3;
+  GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_IN;
+  GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+  GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+  GPIO_InitStructure.GPIO_PuPd  = GPIO_PuPd_NOPULL;
+  GPIO_Init(GPIOA, &GPIO_InitStructure);
+}
+
+
+__attribute__ ((unused))
+static void
 led_on(void)
 {
   GPIO_SetBits(GPIOG, GPIO_Pin_15);
 }
 
 
+__attribute__ ((unused))
 static void
 led_off(void)
 {
@@ -241,101 +260,214 @@ println_float(USART_TypeDef* usart, float f,
 
 
 static void
-fill_mem_inc(uint16_t start, uint32_t block)
+setup_systick(void)
 {
-  uint16_t *mem = (uint16_t *)(uint32_t)0x60000000;
-  uint32_t i, j;
-  uint16_t v = start;
-
-  for (i = 0; i < SRAM_SIZE; i += block)
-  {
-    for (j = 0; j < block; j += 2)
-    {
-      mem[(i+j)/2] = v;
-    }
-    ++v;
-  }
+  SysTick->LOAD = 0xffffff;
+  SysTick->VAL = 0;
+  SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
 }
 
 
-static uint32_t
-check_mem_inc(uint16_t start, uint32_t block)
+static inline uint32_t
+get_time(void)
 {
-  uint16_t *mem = (uint16_t *)(uint32_t)0x60000000;
-  uint32_t i, j;
-  uint32_t err = 0;
-  uint16_t v = start;
+  return SysTick->VAL;
+}
+static inline uint32_t
+calc_time_from_val(uint32_t start, uint32_t stop)
+{
+  return (start - stop) & 0xffffff;
+}
 
-  for (i = 0; i < SRAM_SIZE; i += block)
-  {
-    for (j = 0; j < block; j += 2)
-    {
-      uint16_t d = mem[(i+j)/2];
-      if (d != v)
-      {
-        ++err;
-        if (err <= 5)
-        {
-          serial_puts(USART2, "[0x");
-          serial_output_hexbyte(USART2, d >> 8);
-          serial_output_hexbyte(USART2, d & 0xff);
-          serial_puts(USART2, "!=0x");
-          serial_output_hexbyte(USART2, v >> 8);
-          serial_output_hexbyte(USART2, v & 0xff);
-          serial_puts(USART2, "]");
-        }
-      }
-    }
-    ++v;
-  }
-  return err;
+
+static inline uint32_t
+calc_time(uint32_t start)
+{
+  uint32_t stop = get_time();
+  return calc_time_from_val(start, stop);
+}
+
+
+static float
+calc_time_usec(uint32_t start, uint32_t stop)
+{
+  uint32_t dur = calc_time_from_val(start, stop);
+  return (float)dur * (1000000.0f/(float)MCU_HZ);
 }
 
 
 static void
-check_block(uint16_t start, uint32_t block)
+check_timing(void)
 {
-  uint32_t err;
+  uint32_t t_start, t_end;
+  uint32_t cnt;
 
-  serial_puts(USART2, "write block start=0x");
-  serial_output_hexbyte(USART2, start >> 8);
-  serial_output_hexbyte(USART2, start & 0xff);
-  serial_puts(USART2, " size=");
-  println_uint32(USART2, block);
-  led_on();
-  fill_mem_inc(start, block);
+  /* Do a million iterations in a controlled loop to check timing precision. */
+  cnt = 1000000;
+  t_start = get_time();
+  __asm __volatile(
+        "1:\n\t"
+        "subs %[cnt], #1\n\t"
+        "bne 1b\n"
+        : [cnt] "+r" (cnt)
+  );
+  t_end = get_time();
+  serial_puts(USART2, "Timing check usec: ");
+  println_float(USART2, calc_time_usec(t_start, t_end), 6, 1);
+}
 
-  serial_puts(USART2, "Read back ...");
-  led_off();
-  err = check_mem_inc(start, block);
-  serial_puts(USART2, " errors=");
-  println_uint32(USART2, err);
+
+static void
+check_read_speed(void)
+{
+  uint32_t i;
+  uint32_t t_start, t_end, duration;
+  float cycles, usec;
+  volatile uint16_t *p = SRAM;
+  static const uint32_t iterations = 1000;
+
+  serial_puts(USART2, "Read test:\r\n");
+  t_start = get_time();
+  i = iterations;
+  do
+  {
+    (void)(*p);
+    (void)(*p);
+    (void)(*p);
+    (void)(*p);
+    (void)(*p);
+    (void)(*p);
+    -- i;
+  } while (i != 0);
+  t_end = get_time();
+
+  duration = calc_time_from_val(t_start, t_end);
+  cycles = (float)duration*(1.0f/(float)(iterations*1));
+  usec = (float)duration*(1000000.0f/(float)MCU_HZ/(float)(iterations*1));
+  serial_puts(USART2, "Burst read cycles: ");
+  println_float(USART2, cycles, 2, 4);
+  serial_puts(USART2, "Burst read nsec: ");
+  println_float(USART2, usec*1000.0f, 3, 3);
+}
+
+
+static void
+check_write_speed(void)
+{
+  uint32_t i;
+  uint32_t t_start, t_end, duration;
+  float cycles, usec;
+  volatile uint16_t *p = SRAM;
+  static const uint32_t iterations = 1000;
+
+  serial_puts(USART2, "Write test:\r\n");
+  t_start = get_time();
+  i = iterations;
+  do
+  {
+    (void)(*p);
+    (void)(*p);
+    (void)(*p);
+    -- i;
+  } while (i != 0);
+  t_end = get_time();
+
+  duration = calc_time_from_val(t_start, t_end);
+  cycles = (float)duration*(1.0f/(float)(iterations*1));
+  usec = (float)(cycles-4)*(1000000000.0f/(float)MCU_HZ/(float)(iterations*3));
+  serial_puts(USART2, "Burst write cycles/loop: ");
+  println_float(USART2, cycles, 2, 4);
+  serial_puts(USART2, "Burst nsec/write: ");
+  println_float(USART2, usec*1000.0f, 3, 3);
+}
+
+
+static void
+check_readwrite_speed(void)
+{
+  uint32_t i;
+  uint32_t t_start, t_end, duration;
+  float cycles, usec;
+  volatile uint16_t *p = SRAM;
+  static const uint32_t iterations = 1000;
+
+  serial_puts(USART2, "Read/write test:\r\n");
+  t_start = get_time();
+  i = iterations;
+  do
+  {
+    (void)*p;
+    *p = iterations;
+    -- i;
+  } while (i != 0);
+  t_end = get_time();
+
+  duration = calc_time_from_val(t_start, t_end);
+  cycles = (float)duration*(1.0f/(float)(iterations*1));
+  usec = (float)(cycles-4)*(1000000000.0f/(float)MCU_HZ/(float)(iterations*3));
+  serial_puts(USART2, "Burst readwrite cycles/loop: ");
+  println_float(USART2, cycles, 2, 4);
+  serial_puts(USART2, "Burst nsec/readwrite: ");
+  println_float(USART2, usec*1000.0f, 3, 3);
+}
+
+
+static void
+check_gpioreadwrite_speed(void)
+{
+  uint32_t i;
+  uint32_t t_start, t_end, duration;
+  float cycles, usec;
+  volatile uint16_t *p = SRAM;
+  static const uint32_t iterations = 1000;
+  volatile uint32_t *gpio_set_ptr = (volatile uint32_t *)&GPIOG->BSRRL;
+  uint32_t gpio_set_val = 1<<15;
+  volatile uint32_t *gpio_read_ptr = &GPIOA->IDR;
+
+  serial_puts(USART2, "GPIO/read/write test:\r\n");
+  t_start = get_time();
+  i = iterations;
+  do
+  {
+    (void)*gpio_read_ptr;
+    (void)*p;
+    *p = iterations;
+    *gpio_set_ptr = gpio_set_val;
+    -- i;
+  } while (i != 0);
+  t_end = get_time();
+
+  duration = calc_time_from_val(t_start, t_end);
+  cycles = (float)duration*(1.0f/(float)(iterations));
+  usec = (float)(cycles)*(1000000000.0f/(float)MCU_HZ/(float)(iterations));
+  serial_puts(USART2, "Burst gpioreadwrite cycles/loop: ");
+  println_float(USART2, cycles, 2, 4);
+  serial_puts(USART2, "Burst nsec/loop: ");
+  println_float(USART2, usec*1000.0f, 3, 3);
 }
 
 
 int main(void)
 {
-  uint16_t word;
-
+  setup_systick();
   delay(2000000);
   setup_serial();
   setup_led();
+  setup_dummy_gpio();
   serial_puts(USART2, "Initialising...\r\n");
   delay(2000000);
 
   serial_puts(USART2, "Hello world, ready to blink!\r\n");
-
-  word = 1;
+  led_off();
+  check_timing();
+  check_read_speed();
+  check_write_speed();
+  check_readwrite_speed();
+  check_gpioreadwrite_speed();
+  led_off();
 
   while (1)
   {
-    check_block(word, 2);
-    check_block(word, 4);
-    check_block(word, 32);
-    check_block(word, 4096);
-    check_block(word, 0x10000);
-
-    word += 18637;
   }
 
   return 0;
