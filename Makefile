@@ -57,14 +57,10 @@ INC_DIRS += .
 ######################################################################
 
 
-# This is the path to the toolchain
-# (we don't put our toolchain on $PATH to keep the system clean)
-TOOLS_DIR = /home/knielsen/devel/study/stellaris-arm/install/bin
-
 # The tool we use
-CC      = $(TOOLS_DIR)/arm-none-eabi-gcc
-OBJCOPY = $(TOOLS_DIR)/arm-none-eabi-objcopy
-GDB     = $(TOOLS_DIR)/arm-none-eabi-gdb
+CC      = arm-none-eabi-gcc
+OBJCOPY = arm-none-eabi-objcopy
+GDB     = arm-none-eabi-gdb
 
 ## Preprocessor options
 
@@ -112,7 +108,7 @@ clean:
 
 # Flash the STM32F4
 flash: 
-	$(TOOLS_DIR)/st-flash write $(PROJ_NAME).bin 0x8000000
+	st-flash write $(PROJ_NAME).bin 0x8000000
 
 .PHONY: debug
 debug:
